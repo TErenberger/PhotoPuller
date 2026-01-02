@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 import subprocess
 import os
+import json
 from photopuller_core import PhotoPullerCore
 
 class PhotoPullerGUI:
@@ -17,6 +18,22 @@ class PhotoPullerGUI:
         self.root.title("PhotoPuller - Find & Organize Photos & Videos")
         self.root.geometry("1200x800")
         
+        # Set Windows native theme
+        style = ttk.Style()
+        # Try to use Windows native theme (vista, xpnative, or winnative)
+        try:
+            style.theme_use('vista')  # Windows Vista/7/10/11 theme
+        except:
+            try:
+                style.theme_use('xpnative')  # Windows XP theme fallback
+            except:
+                style.theme_use('winnative')  # Classic Windows theme fallback
+        
+        # Configure native Windows styling
+        style.configure('Title.TLabel', font=('Segoe UI', 10, 'bold'))
+        style.configure('Heading.TLabel', font=('Segoe UI', 9))
+        style.configure('Status.TLabel', font=('Segoe UI', 8))
+        
         self.core = PhotoPullerCore()  # Use core class for business logic
         self.file_to_item_map = {}  # Map file paths to treeview items
         self.file_copy_status = {}  # Track copy status for each file
@@ -24,12 +41,21 @@ class PhotoPullerGUI:
         self.scan_videos = tk.BooleanVar(value=True)  # Filter for videos
         self.scan_pdfs = tk.BooleanVar(value=True)  # Filter for PDFs
         
+        # Path to excluded folders JSON file (in same directory as script)
+        self.excluded_folders_file = Path(__file__).parent / "excluded_folders.json"
+        
+        # Load excluded folders on startup
+        self.load_excluded_folders()
+        
         self.setup_ui()
+        
+        # Populate excluded folders listbox after UI is created
+        self.update_excluded_listbox()
     
     def setup_ui(self):
         """Set up the user interface"""
-        # Main container
-        main_frame = ttk.Frame(self.root, padding="10")
+        # Main container with Windows-style padding
+        main_frame = ttk.Frame(self.root, padding="12")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
@@ -39,150 +65,171 @@ class PhotoPullerGUI:
         
         # Left column container
         left_column = ttk.Frame(main_frame)
-        left_column.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
+        left_column.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 8))
         left_column.columnconfigure(0, weight=1)
         
         # Source drive selection
-        source_frame = ttk.LabelFrame(left_column, text="Source Drive", padding="10")
-        source_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
+        source_frame = ttk.LabelFrame(left_column, text="Source Drive", padding="12")
+        source_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         
         self.source_var = tk.StringVar(value="C:\\")
-        source_entry = ttk.Entry(source_frame, textvariable=self.source_var, width=30)
-        source_entry.grid(row=0, column=0, padx=5)
+        source_entry = ttk.Entry(source_frame, textvariable=self.source_var, width=32)
+        source_entry.grid(row=0, column=0, padx=(0, 6), pady=4, sticky=(tk.W, tk.E))
+        source_frame.columnconfigure(0, weight=1)
         
-        ttk.Button(source_frame, text="Browse...", 
-                  command=self.browse_source).grid(row=0, column=1, padx=5)
+        # Button frame for better alignment
+        button_frame = ttk.Frame(source_frame)
+        button_frame.grid(row=0, column=1, padx=(0, 0))
         
-        ttk.Button(source_frame, text="Scan Drive", 
-                  command=self.start_scan).grid(row=0, column=2, padx=5)
+        ttk.Button(button_frame, text="Browse...", 
+                  command=self.browse_source, width=12).grid(row=0, column=0, padx=(0, 4))
+        
+        ttk.Button(button_frame, text="Scan Drive", 
+                  command=self.start_scan, width=12).grid(row=0, column=1, padx=0)
         
         # File type filters
         filter_frame = ttk.Frame(source_frame)
-        filter_frame.grid(row=1, column=0, columnspan=3, pady=5, sticky=tk.W)
+        filter_frame.grid(row=1, column=0, columnspan=2, pady=(8, 0), sticky=tk.W)
         
-        ttk.Label(filter_frame, text="Scan for:").grid(row=0, column=0, padx=5)
-        ttk.Checkbutton(filter_frame, text="Photos", variable=self.scan_photos).grid(row=0, column=1, padx=5)
-        ttk.Checkbutton(filter_frame, text="Videos", variable=self.scan_videos).grid(row=0, column=2, padx=5)
-        ttk.Checkbutton(filter_frame, text="PDFs", variable=self.scan_pdfs).grid(row=0, column=3, padx=5)
+        ttk.Label(filter_frame, text="Scan for:", style='Heading.TLabel').grid(row=0, column=0, padx=(0, 8))
+        ttk.Checkbutton(filter_frame, text="Photos", variable=self.scan_photos).grid(row=0, column=1, padx=6)
+        ttk.Checkbutton(filter_frame, text="Videos", variable=self.scan_videos).grid(row=0, column=2, padx=6)
+        ttk.Checkbutton(filter_frame, text="PDFs", variable=self.scan_pdfs).grid(row=0, column=3, padx=6)
         
         # Scan progress
-        progress_frame = ttk.LabelFrame(left_column, text="Scan Progress", padding="10")
-        progress_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
+        progress_frame = ttk.LabelFrame(left_column, text="Scan Progress", padding="12")
+        progress_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         progress_frame.columnconfigure(0, weight=1)
         
         self.scan_progress_var = tk.StringVar(value="Ready to scan")
         progress_label = ttk.Label(progress_frame, textvariable=self.scan_progress_var, 
-                                  anchor=tk.W, justify=tk.LEFT)
-        progress_label.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=2)
+                                  anchor=tk.W, justify=tk.LEFT, style='Status.TLabel')
+        progress_label.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
         
         # Current file being scanned (on its own line)
         self.scan_current_file_var = tk.StringVar(value="")
         current_file_label = ttk.Label(progress_frame, textvariable=self.scan_current_file_var, 
-                                       anchor=tk.W, justify=tk.LEFT, foreground="gray")
-        current_file_label.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=2)
+                                       anchor=tk.W, justify=tk.LEFT, style='Status.TLabel',
+                                       foreground="gray")
+        current_file_label.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 6))
         
-        self.scan_progress_bar = ttk.Progressbar(progress_frame, mode='indeterminate')
-        self.scan_progress_bar.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
+        self.scan_progress_bar = ttk.Progressbar(progress_frame, mode='indeterminate', length=200)
+        self.scan_progress_bar.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=0)
         
         # Excluded folders section
-        excluded_frame = ttk.LabelFrame(left_column, text="Excluded Folders", padding="10")
-        excluded_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
+        excluded_frame = ttk.LabelFrame(left_column, text="Excluded Folders", padding="12")
+        excluded_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         
-        self.excluded_listbox = tk.Listbox(excluded_frame, height=3)
-        self.excluded_listbox.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        self.excluded_listbox = tk.Listbox(excluded_frame, height=4, relief=tk.SUNKEN, 
+                                           borderwidth=1, font=('Segoe UI', 9))
+        self.excluded_listbox.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 8))
         excluded_frame.columnconfigure(0, weight=1)
         
         # Bind double-click to edit exclusion
         self.excluded_listbox.bind('<Double-Button-1>', lambda e: self.edit_exclusion())
         
-        ttk.Button(excluded_frame, text="Edit", 
-                  command=self.edit_exclusion).grid(row=1, column=0, padx=5, pady=2)
-        ttk.Button(excluded_frame, text="Remove", 
-                  command=self.remove_exclusion).grid(row=1, column=1, padx=5, pady=2)
-        ttk.Button(excluded_frame, text="Clear All", 
-                  command=self.clear_all_exclusions).grid(row=1, column=2, padx=5, pady=2)
+        # Button frame for better alignment
+        excluded_button_frame = ttk.Frame(excluded_frame)
+        excluded_button_frame.grid(row=1, column=0, columnspan=3)
+        
+        ttk.Button(excluded_button_frame, text="Edit", 
+                  command=self.edit_exclusion, width=10).grid(row=0, column=0, padx=(0, 4))
+        ttk.Button(excluded_button_frame, text="Remove", 
+                  command=self.remove_exclusion, width=10).grid(row=0, column=1, padx=(0, 4))
+        ttk.Button(excluded_button_frame, text="Clear All", 
+                  command=self.clear_all_exclusions, width=10).grid(row=0, column=2, padx=0)
         
         # Destination selection
-        dest_frame = ttk.LabelFrame(left_column, text="Destination", padding="10")
-        dest_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=5)
+        dest_frame = ttk.LabelFrame(left_column, text="Destination", padding="12")
+        dest_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         
         self.dest_var = tk.StringVar()
-        dest_entry = ttk.Entry(dest_frame, textvariable=self.dest_var, width=30)
-        dest_entry.grid(row=0, column=0, padx=5)
+        dest_entry = ttk.Entry(dest_frame, textvariable=self.dest_var, width=32)
+        dest_entry.grid(row=0, column=0, padx=(0, 6), pady=4, sticky=(tk.W, tk.E))
+        dest_frame.columnconfigure(0, weight=1)
         # Trace destination changes to update copy button state
         self.dest_var.trace_add('write', lambda *args: self.update_copy_button_state())
         
         ttk.Button(dest_frame, text="Browse...", 
-                  command=self.browse_destination).grid(row=0, column=1, padx=5)
+                  command=self.browse_destination, width=12).grid(row=0, column=1, padx=0)
         
         # Organization method
         org_frame = ttk.Frame(dest_frame)
-        org_frame.grid(row=1, column=0, columnspan=2, pady=5)
+        org_frame.grid(row=1, column=0, columnspan=2, pady=(8, 0), sticky=tk.W)
         
-        ttk.Label(org_frame, text="Organize by:").grid(row=0, column=0, padx=2)
+        ttk.Label(org_frame, text="Organize by:", style='Heading.TLabel').grid(row=0, column=0, padx=(0, 8))
         self.org_method_var = tk.StringVar(value="date")
         ttk.Radiobutton(org_frame, text="Date", variable=self.org_method_var, 
-                       value="date").grid(row=0, column=1, padx=2)
+                       value="date").grid(row=0, column=1, padx=8)
         ttk.Radiobutton(org_frame, text="Source", variable=self.org_method_var, 
-                       value="source").grid(row=0, column=2, padx=2)
+                       value="source").grid(row=0, column=2, padx=8)
         
         # Copy button
         self.copy_button = ttk.Button(dest_frame, text="Copy Files", 
-                                      command=self.start_copy, state=tk.DISABLED)
-        self.copy_button.grid(row=2, column=0, columnspan=2, pady=10)
+                                      command=self.start_copy, state=tk.DISABLED, width=20)
+        self.copy_button.grid(row=2, column=0, columnspan=2, pady=(12, 0))
         
         # Copy progress
-        copy_progress_frame = ttk.LabelFrame(left_column, text="Copy Progress", padding="10")
-        copy_progress_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=5)
+        copy_progress_frame = ttk.LabelFrame(left_column, text="Copy Progress", padding="12")
+        copy_progress_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=0)
         copy_progress_frame.columnconfigure(0, weight=1)
         
         self.copy_progress_var = tk.StringVar(value="")
-        ttk.Label(copy_progress_frame, textvariable=self.copy_progress_var).grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(copy_progress_frame, textvariable=self.copy_progress_var, 
+                 style='Status.TLabel').grid(row=0, column=0, sticky=tk.W, pady=(0, 4))
         
         # Overall progress bar
-        self.copy_progress_bar = ttk.Progressbar(copy_progress_frame, mode='determinate')
-        self.copy_progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
+        self.copy_progress_bar = ttk.Progressbar(copy_progress_frame, mode='determinate', length=200)
+        self.copy_progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 6))
         
         # Current file being copied
         self.copy_current_file_var = tk.StringVar(value="")
         current_file_label = ttk.Label(copy_progress_frame, textvariable=self.copy_current_file_var, 
-                                      anchor=tk.W, justify=tk.LEFT, foreground="gray")
-        current_file_label.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=2)
+                                      anchor=tk.W, justify=tk.LEFT, style='Status.TLabel',
+                                      foreground="gray")
+        current_file_label.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
         
         # Per-file progress bar
-        self.copy_file_progress_bar = ttk.Progressbar(copy_progress_frame, mode='determinate')
-        self.copy_file_progress_bar.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=5)
+        self.copy_file_progress_bar = ttk.Progressbar(copy_progress_frame, mode='determinate', length=200)
+        self.copy_file_progress_bar.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
         
         # Copy rate display
         self.copy_rate_var = tk.StringVar(value="")
         copy_rate_label = ttk.Label(copy_progress_frame, textvariable=self.copy_rate_var, 
-                                   anchor=tk.W, justify=tk.LEFT, foreground="blue")
-        copy_rate_label.grid(row=4, column=0, sticky=tk.W, pady=2)
+                                   anchor=tk.W, justify=tk.LEFT, style='Status.TLabel',
+                                   foreground="blue")
+        copy_rate_label.grid(row=4, column=0, sticky=tk.W, pady=0)
         
         # Right column - Results
-        results_frame = ttk.LabelFrame(main_frame, text="Scan Results", padding="10")
-        results_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
+        results_frame = ttk.LabelFrame(main_frame, text="Scan Results", padding="12")
+        results_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(8, 0))
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
         
         # Results treeview
         tree_frame = ttk.Frame(results_frame)
-        tree_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        tree_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 8))
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
         
-        self.results_tree = ttk.Treeview(tree_frame, columns=("File Path", "Type", "Size", "Date"), show="tree headings", height=15)
+        # Configure Treeview style for native Windows look
+        style = ttk.Style()
+        style.configure("Treeview", font=('Segoe UI', 9), rowheight=22)
+        style.configure("Treeview.Heading", font=('Segoe UI', 9, 'bold'))
+        
+        self.results_tree = ttk.Treeview(tree_frame, columns=("File Path", "Type", "Size", "Date"), 
+                                        show="tree headings", height=15)
         self.results_tree.heading("#0", text="Status")
         self.results_tree.heading("File Path", text="File Path")
         self.results_tree.heading("Type", text="Type")
         self.results_tree.heading("Size", text="Size")
         self.results_tree.heading("Date", text="Modified")
         
-        self.results_tree.column("#0", width=90)
-        self.results_tree.column("File Path", width=280)
-        self.results_tree.column("Type", width=70)
-        self.results_tree.column("Size", width=90)
-        self.results_tree.column("Date", width=130)
+        self.results_tree.column("#0", width=90, anchor=tk.W)
+        self.results_tree.column("File Path", width=280, anchor=tk.W)
+        self.results_tree.column("Type", width=70, anchor=tk.W)
+        self.results_tree.column("Size", width=90, anchor=tk.W)
+        self.results_tree.column("Date", width=130, anchor=tk.W)
         
         scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
         self.results_tree.configure(yscrollcommand=scrollbar.set)
@@ -203,7 +250,7 @@ class PhotoPullerGUI:
         
         # Stats label
         self.stats_var = tk.StringVar(value="No files found yet")
-        ttk.Label(results_frame, textvariable=self.stats_var).grid(row=1, column=0, pady=5)
+        ttk.Label(results_frame, textvariable=self.stats_var, style='Status.TLabel').grid(row=1, column=0, pady=(0, 0))
     
     def browse_source(self):
         """Browse for source drive/directory"""
@@ -327,6 +374,13 @@ class PhotoPullerGUI:
         else:
             self.copy_button.config(state=tk.DISABLED)
     
+    def update_excluded_listbox(self):
+        """Update the excluded folders listbox display"""
+        if hasattr(self, 'excluded_listbox'):
+            self.excluded_listbox.delete(0, tk.END)
+            for folder in sorted(self.core.excluded_folders):
+                self.excluded_listbox.insert(tk.END, str(folder))
+    
     def apply_exclusions(self):
         """Filter results based on excluded folders"""
         # Use core's files and infos
@@ -336,9 +390,7 @@ class PhotoPullerGUI:
         self.all_file_infos = self.core.all_file_infos
         
         # Update excluded folders listbox
-        self.excluded_listbox.delete(0, tk.END)
-        for folder in sorted(self.core.excluded_folders):
-            self.excluded_listbox.insert(tk.END, str(folder))
+        self.update_excluded_listbox()
         
         # Populate results tree
         self.results_tree.delete(*self.results_tree.get_children())
@@ -607,6 +659,9 @@ class PhotoPullerGUI:
             # Add to excluded folders using core
             self.core.add_excluded_folder(str(parent_folder))
             
+            # Save excluded folders to file
+            self.save_excluded_folders()
+            
             # Reapply exclusions to update the display
             self.apply_exclusions()
             
@@ -633,8 +688,8 @@ class PhotoPullerGUI:
         
         ttk.Label(edit_window, text="Folder Path:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         path_var = tk.StringVar(value=str(folder_path))
-        path_entry = ttk.Entry(edit_window, textvariable=path_var, width=50)
-        path_entry.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.W, tk.E))
+        path_entry = ttk.Entry(edit_window, textvariable=path_var, width=55)
+        path_entry.grid(row=0, column=1, padx=(0, 12), pady=12, sticky=(tk.W, tk.E))
         edit_window.columnconfigure(1, weight=1)
         
         def save_changes():
@@ -646,6 +701,9 @@ class PhotoPullerGUI:
             # Remove old path and add new path using core
             self.core.remove_excluded_folder(folder_str)
             self.core.add_excluded_folder(new_path_str)
+            
+            # Save excluded folders to file
+            self.save_excluded_folders()
             
             # Reapply exclusions to update the display
             self.apply_exclusions()
@@ -663,9 +721,9 @@ class PhotoPullerGUI:
         edit_window.bind('<Return>', on_enter)
         
         button_frame = ttk.Frame(edit_window)
-        button_frame.grid(row=1, column=0, columnspan=2, pady=10)
-        ttk.Button(button_frame, text="Save", command=save_changes).grid(row=0, column=0, padx=5)
-        ttk.Button(button_frame, text="Cancel", command=cancel).grid(row=0, column=1, padx=5)
+        button_frame.grid(row=1, column=0, columnspan=2, pady=(0, 12))
+        ttk.Button(button_frame, text="Save", command=save_changes, width=12).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(button_frame, text="Cancel", command=cancel, width=12).grid(row=0, column=1, padx=0)
         
         path_entry.focus()
         path_entry.select_range(0, tk.END)
@@ -683,6 +741,9 @@ class PhotoPullerGUI:
         # Remove from excluded folders using core
         self.core.remove_excluded_folder(folder_str)
         
+        # Save excluded folders to file
+        self.save_excluded_folders()
+        
         # Reapply exclusions to update the display
         self.apply_exclusions()
     
@@ -696,7 +757,37 @@ class PhotoPullerGUI:
                                      f"Are you sure you want to clear all {len(self.core.excluded_folders)} folder exclusions?")
         if result:
             self.core.clear_excluded_folders()
+            # Save excluded folders to file
+            self.save_excluded_folders()
             self.apply_exclusions()
+    
+    def load_excluded_folders(self):
+        """Load excluded folders from JSON file"""
+        try:
+            if self.excluded_folders_file.exists():
+                with open(self.excluded_folders_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    excluded_folders = data.get('excluded_folders', [])
+                    # Add each folder to the core
+                    for folder_path in excluded_folders:
+                        self.core.add_excluded_folder(folder_path)
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            # If file is corrupted or can't be read, just start with empty list
+            print(f"Warning: Could not load excluded folders: {e}")
+    
+    def save_excluded_folders(self):
+        """Save excluded folders to JSON file"""
+        try:
+            # Convert Path objects to strings for JSON serialization
+            excluded_folders = [str(folder) for folder in self.core.excluded_folders]
+            data = {
+                'excluded_folders': excluded_folders
+            }
+            with open(self.excluded_folders_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except (IOError, OSError) as e:
+            # If we can't save, show a warning but don't crash
+            print(f"Warning: Could not save excluded folders: {e}")
     
     def run(self):
         """Start the GUI application"""

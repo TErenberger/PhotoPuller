@@ -39,6 +39,7 @@ Thumbs.db
 
 # Application specific
 *.log
+excluded_folders.json
 
 # PyInstaller build artifacts
 build/
