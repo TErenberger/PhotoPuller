@@ -1,0 +1,10 @@
+# PhotoPuller Requirements
+# This application uses only Python standard library modules
+# No external dependencies required for running the application!
+
+# Python 3.7+ is recommended for best compatibility
+
+# For packaging the application into an executable:
+# pyinstaller>=5.0
+
+
