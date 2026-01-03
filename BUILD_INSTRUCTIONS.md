@@ -88,3 +88,4 @@ To add a custom icon to your executable:
 3. Rebuild using the spec file
 
 
+

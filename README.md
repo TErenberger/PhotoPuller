@@ -11,6 +11,7 @@ A simple Windows application to find and organize important photos and videos fr
 - **Progress Tracking**: Real-time progress updates during scanning and copying
 - **Flexible Organization**: Choose to organize by date (Year/Month) or by source drive
 - **Dual Mode Operation**: Run with a GUI for interactive use or headless via CLI for automation
+- **MCP Server Support**: Expose PhotoPuller functionality to AI agents via Model Context Protocol
 - **Dry Run Mode**: Preview what would be copied without actually copying files
 - **Selective File Types**: Choose which file types to scan (photos, videos, PDFs)
 
@@ -141,6 +142,44 @@ python photopuller_cli.py -s C:\ -d D:\Backup --organize-by source
 # Output results as JSON for scripting
 python photopuller_cli.py -s C:\ -d D:\Backup --json > results.json
 ```
+
+## MCP Server (AI Agent Integration)
+
+PhotoPuller includes an MCP (Model Context Protocol) server that allows AI agents to interact with the application programmatically. This enables AI assistants like Claude to help users organize their files.
+
+### Quick Start
+
+1. **Test the MCP Server**:
+   ```bash
+   python test_mcp_server.py
+   ```
+
+2. **Configure Claude Desktop** (see `MCP_SETUP.md` for details):
+   - Add PhotoPuller to your Claude Desktop configuration
+   - Restart Claude Desktop
+   - AI agents can now use PhotoPuller tools
+
+### Available MCP Tools
+
+- `photopuller_scan` - Scan drives for photos, videos, and PDFs
+- `photopuller_get_scan_stats` - Get scan statistics
+- `photopuller_copy_files` - Copy files to organized destination
+- `photopuller_get_copy_stats` - Get copy operation statistics
+- `photopuller_add_exclusion` - Add folder to exclusion list
+- `photopuller_remove_exclusion` - Remove folder from exclusions
+- `photopuller_clear_exclusions` - Clear all exclusions
+
+### Example AI Interaction
+
+An AI agent can help users by:
+1. Asking what drive/folder to scan
+2. Calling `photopuller_scan` with user's preferences
+3. Showing scan results and statistics
+4. Asking for destination and organization preferences
+5. Running a dry-run first to preview
+6. Copying files when user confirms
+
+For detailed setup instructions, see [MCP_SETUP.md](MCP_SETUP.md).
 
 ## Folder Structure
 
