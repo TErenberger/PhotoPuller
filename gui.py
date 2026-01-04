@@ -10,6 +10,13 @@ import os
 import json
 from photopuller_core import PhotoPullerCore
 
+# Try to import PIL/Pillow for thumbnail support (optional)
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
 class PhotoPullerGUI:
     """Main GUI application"""
     
@@ -204,13 +211,14 @@ class PhotoPullerGUI:
         results_frame = ttk.LabelFrame(main_frame, text="Scan Results", padding="12")
         results_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(8, 0))
         results_frame.columnconfigure(0, weight=1)
-        results_frame.rowconfigure(0, weight=1)
+        results_frame.rowconfigure(0, weight=1)  # Treeview row
+        results_frame.rowconfigure(1, weight=0)  # Thumbnail row (fixed size)
         
         # Results treeview
         tree_frame = ttk.Frame(results_frame)
         tree_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 8))
-        results_frame.columnconfigure(0, weight=1)
-        results_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
         
         # Configure Treeview style for native Windows look
         style = ttk.Style()
@@ -248,9 +256,68 @@ class PhotoPullerGUI:
         # Bind right-click to show context menu
         self.results_tree.bind("<Button-3>", self.show_context_menu)
         
+        # Bind selection event to update thumbnail
+        self.results_tree.bind("<<TreeviewSelect>>", self.on_treeview_select)
+        
+        # Thumbnail preview frame (fixed size, 16:9 aspect ratio)
+        # 640x360 for 16:9 ratio (width:height = 16:9)
+        self.THUMBNAIL_WIDTH = 640
+        self.THUMBNAIL_HEIGHT = 360
+        self.preview_collapsed = False  # Track collapse state
+        
+        thumbnail_frame = ttk.LabelFrame(results_frame, text="Preview", padding="12")
+        thumbnail_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
+        thumbnail_frame.columnconfigure(0, weight=1)
+        
+        # Header frame with toggle button
+        preview_header_frame = ttk.Frame(thumbnail_frame)
+        preview_header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
+        
+        # Toggle button for collapse/expand
+        self.preview_toggle_button = ttk.Button(
+            preview_header_frame, 
+            text="▼",  # Down arrow = expanded
+            command=self.toggle_preview,
+            width=3
+        )
+        self.preview_toggle_button.grid(row=0, column=0, padx=(0, 6))
+        
+        # Label for "Preview" text
+        preview_label = ttk.Label(preview_header_frame, text="Preview", style='Heading.TLabel')
+        preview_label.grid(row=0, column=1, sticky=tk.W)
+        
+        # Thumbnail display area with fixed size using Canvas for better control
+        self.thumbnail_canvas_frame = ttk.Frame(thumbnail_frame)
+        self.thumbnail_canvas_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        
+        # Use Canvas for fixed-size image display
+        self.thumbnail_canvas = tk.Canvas(self.thumbnail_canvas_frame, 
+                                          width=self.THUMBNAIL_WIDTH, 
+                                          height=self.THUMBNAIL_HEIGHT,
+                                          bg='white', relief=tk.SUNKEN, borderwidth=1)
+        self.thumbnail_canvas.grid(row=0, column=0)
+        self.thumbnail_canvas_id = None  # Keep reference to canvas image item
+        self.current_thumbnail_image = None  # Keep reference to prevent garbage collection
+        
+        # Text label for placeholder (centered on canvas)
+        self.thumbnail_text_id = self.thumbnail_canvas.create_text(
+            self.THUMBNAIL_WIDTH // 2, 
+            self.THUMBNAIL_HEIGHT // 2,
+            text="Select a file to preview",
+            font=('Segoe UI', 9),
+            fill='gray'
+        )
+        
+        # File info label below thumbnail
+        self.thumbnail_info_var = tk.StringVar(value="")
+        self.thumbnail_info_label = ttk.Label(thumbnail_frame, textvariable=self.thumbnail_info_var,
+                                         anchor=tk.CENTER, justify=tk.CENTER,
+                                         style='Status.TLabel', wraplength=self.THUMBNAIL_WIDTH - 40)
+        self.thumbnail_info_label.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(8, 0))
+        
         # Stats label
         self.stats_var = tk.StringVar(value="No files found yet")
-        ttk.Label(results_frame, textvariable=self.stats_var, style='Status.TLabel').grid(row=1, column=0, pady=(0, 0))
+        ttk.Label(results_frame, textvariable=self.stats_var, style='Status.TLabel').grid(row=2, column=0, pady=(0, 0))
     
     def browse_source(self):
         """Browse for source drive/directory"""
@@ -667,6 +734,226 @@ class PhotoPullerGUI:
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to exclude folder:\n{str(e)}")
+    
+    def toggle_preview(self):
+        """Toggle the preview section between collapsed and expanded"""
+        self.preview_collapsed = not self.preview_collapsed
+        
+        if self.preview_collapsed:
+            # Collapse: hide the preview content
+            self.thumbnail_canvas_frame.grid_remove()
+            self.thumbnail_info_label.grid_remove()
+            # Update button to show right arrow (collapsed)
+            self.preview_toggle_button.config(text="▶")
+        else:
+            # Expand: show the preview content
+            self.thumbnail_canvas_frame.grid()
+            self.thumbnail_info_label.grid()
+            # Update button to show down arrow (expanded)
+            self.preview_toggle_button.config(text="▼")
+    
+    def on_treeview_select(self, event=None):
+        """Handle treeview selection event to update thumbnail"""
+        selection = self.results_tree.selection()
+        if not selection:
+            # Clear thumbnail if nothing is selected
+            self.clear_thumbnail()
+            return
+        
+        # Get the file path from the selected item
+        item = selection[0]
+        values = self.results_tree.item(item, "values")
+        
+        if not values or len(values) == 0:
+            self.clear_thumbnail()
+            return
+        
+        file_path_str = values[0]
+        if not file_path_str:
+            self.clear_thumbnail()
+            return
+        
+        # Load and display thumbnail
+        self.load_thumbnail(file_path_str)
+    
+    def clear_thumbnail(self):
+        """Clear the thumbnail display"""
+        # Clear canvas
+        self.thumbnail_canvas.delete("all")
+        # Recreate placeholder text
+        self.thumbnail_text_id = self.thumbnail_canvas.create_text(
+            self.THUMBNAIL_WIDTH // 2, 
+            self.THUMBNAIL_HEIGHT // 2,
+            text="Select a file to preview",
+            font=('Segoe UI', 9),
+            fill='gray'
+        )
+        self.thumbnail_info_var.set("")
+        self.current_thumbnail_image = None
+        self.thumbnail_canvas_id = None
+    
+    def load_thumbnail(self, file_path_str):
+        """Load and display thumbnail for the given file path"""
+        try:
+            file_path = Path(file_path_str)
+            if not file_path.exists():
+                self.thumbnail_canvas.delete("all")
+                self.thumbnail_canvas.create_text(
+                    self.THUMBNAIL_WIDTH // 2, 
+                    self.THUMBNAIL_HEIGHT // 2,
+                    text="File not found",
+                    font=('Segoe UI', 9),
+                    fill='red'
+                )
+                self.thumbnail_info_var.set("")
+                return
+            
+            # Find the file info to determine file type
+            file_info = None
+            if hasattr(self, 'found_files') and hasattr(self, 'file_infos'):
+                try:
+                    idx = self.found_files.index(file_path)
+                    file_info = self.file_infos[idx]
+                except (ValueError, IndexError):
+                    pass
+            
+            # Determine file type
+            is_photo = file_info.get('is_photo', False) if file_info else False
+            is_video = file_info.get('is_video', False) if file_info else False
+            is_pdf = file_info.get('is_pdf', False) if file_info else False
+            
+            # Get file size for display
+            try:
+                file_size = file_path.stat().st_size
+                size_mb = file_size / (1024 * 1024)
+                size_str = f"{size_mb:.2f} MB" if size_mb >= 1 else f"{file_size / 1024:.2f} KB"
+            except:
+                size_str = "Unknown size"
+            
+            # Update file info label
+            file_name = file_path.name
+            file_type_str = "Photo" if is_photo else ("Video" if is_video else ("PDF" if is_pdf else "File"))
+            self.thumbnail_info_var.set(f"{file_name}\n{file_type_str} • {size_str}")
+            
+            # Load thumbnail based on file type
+            if is_photo and PIL_AVAILABLE:
+                self.load_photo_thumbnail(file_path)
+            elif is_video:
+                self.load_video_thumbnail(file_path)
+            elif is_pdf:
+                self.load_pdf_thumbnail(file_path)
+            else:
+                # Unsupported or no PIL available
+                self.thumbnail_canvas.delete("all")
+                if not PIL_AVAILABLE and is_photo:
+                    self.thumbnail_canvas.create_text(
+                        self.THUMBNAIL_WIDTH // 2, 
+                        self.THUMBNAIL_HEIGHT // 2,
+                        text="Install Pillow\n(pip install Pillow)\nto preview images",
+                        font=('Segoe UI', 9),
+                        fill='gray',
+                        justify=tk.CENTER
+                    )
+                else:
+                    self.thumbnail_canvas.create_text(
+                        self.THUMBNAIL_WIDTH // 2, 
+                        self.THUMBNAIL_HEIGHT // 2,
+                        text="Preview not available\nfor this file type",
+                        font=('Segoe UI', 9),
+                        fill='gray',
+                        justify=tk.CENTER
+                    )
+                    
+        except Exception as e:
+            self.thumbnail_canvas.delete("all")
+            self.thumbnail_canvas.create_text(
+                self.THUMBNAIL_WIDTH // 2, 
+                self.THUMBNAIL_HEIGHT // 2,
+                text=f"Error loading preview:\n{str(e)}",
+                font=('Segoe UI', 9),
+                fill='red',
+                justify=tk.CENTER
+            )
+            self.thumbnail_info_var.set("")
+    
+    def load_photo_thumbnail(self, file_path):
+        """Load and display photo thumbnail with fixed 16:9 aspect ratio"""
+        try:
+            # Load and resize image to fit within 16:9 bounds
+            img = Image.open(file_path)
+            
+            # Calculate size maintaining aspect ratio and fitting within 16:9 bounds
+            img_width, img_height = img.size
+            img_aspect = img_width / img_height
+            target_aspect = 16 / 9
+            
+            if img_aspect > target_aspect:
+                # Image is wider, fit to width
+                new_width = self.THUMBNAIL_WIDTH
+                new_height = int(self.THUMBNAIL_WIDTH / img_aspect)
+            else:
+                # Image is taller, fit to height
+                new_height = self.THUMBNAIL_HEIGHT
+                new_width = int(self.THUMBNAIL_HEIGHT * img_aspect)
+            
+            # Resize image (use LANCZOS for quality)
+            try:
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            except AttributeError:
+                # Older PIL versions use Image.LANCZOS directly
+                img = img.resize((new_width, new_height), Image.LANCZOS)
+            
+            # Convert to PhotoImage for Tkinter
+            photo = ImageTk.PhotoImage(img)
+            
+            # Clear canvas and display image
+            self.thumbnail_canvas.delete("all")
+            # Center the image on the canvas
+            x_pos = self.THUMBNAIL_WIDTH // 2
+            y_pos = self.THUMBNAIL_HEIGHT // 2
+            self.thumbnail_canvas_id = self.thumbnail_canvas.create_image(
+                x_pos, y_pos, anchor=tk.CENTER, image=photo
+            )
+            self.current_thumbnail_image = photo  # Keep reference
+            
+        except Exception as e:
+            self.thumbnail_canvas.delete("all")
+            self.thumbnail_canvas.create_text(
+                self.THUMBNAIL_WIDTH // 2, 
+                self.THUMBNAIL_HEIGHT // 2,
+                text=f"Error loading image:\n{str(e)}",
+                font=('Segoe UI', 9),
+                fill='red',
+                justify=tk.CENTER
+            )
+    
+    def load_video_thumbnail(self, file_path):
+        """Load and display video thumbnail (placeholder for now)"""
+        # For videos, we could use ffmpeg or Windows thumbnail extraction
+        # For now, just show a placeholder
+        self.thumbnail_canvas.delete("all")
+        self.thumbnail_canvas.create_text(
+            self.THUMBNAIL_WIDTH // 2, 
+            self.THUMBNAIL_HEIGHT // 2,
+            text="📹 Video File\n\nVideo preview requires\nadditional libraries",
+            font=('Segoe UI', 9),
+            fill='gray',
+            justify=tk.CENTER
+        )
+    
+    def load_pdf_thumbnail(self, file_path):
+        """Load and display PDF thumbnail (placeholder for now)"""
+        # For PDFs, we could use pdf2image or similar
+        # For now, just show a placeholder
+        self.thumbnail_canvas.delete("all")
+        self.thumbnail_canvas.create_text(
+            self.THUMBNAIL_WIDTH // 2, 
+            self.THUMBNAIL_HEIGHT // 2,
+            text="📄 PDF File\n\nPDF preview requires\nadditional libraries",
+            font=('Segoe UI', 9),
+            fill='gray',
+            justify=tk.CENTER
+        )
     
     def edit_exclusion(self):
         """Edit the selected excluded folder path"""

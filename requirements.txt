@@ -4,6 +4,9 @@
 
 # Python 3.7+ is recommended for best compatibility
 
+# Optional: For thumbnail preview functionality (recommended)
+# Pillow>=8.0.0
+
 # For packaging the application into an executable:
 # pyinstaller>=5.0
 
